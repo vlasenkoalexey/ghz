@@ -2,6 +2,11 @@ module github.com/bojand/ghz
 
 go 1.14
 
+replace (
+	github.com/tensorflow/tensorflow => ./github.com/tensorflow/tensorflow
+	tensorflow_serving => ./tensorflow_serving
+)
+
 require (
 	cloud.google.com/go v0.46.3 // indirect
 	github.com/alecthomas/kingpin v1.3.8-0.20191105203113-8c96d1c22481
@@ -12,7 +17,7 @@ require (
 	github.com/go-playground/universal-translator v0.16.0 // indirect
 	github.com/go-playground/validator v9.30.0+incompatible
 	github.com/gogo/protobuf v1.3.1
-	github.com/golang/protobuf v1.3.2
+	github.com/golang/protobuf v1.4.2
 	github.com/google/uuid v1.1.1
 	github.com/jhump/protoreflect v1.5.0
 	github.com/jinzhu/configor v1.1.1
@@ -23,12 +28,17 @@ require (
 	github.com/pkg/errors v0.8.1
 	github.com/rakyll/statik v0.1.6
 	github.com/stretchr/testify v1.4.0
+
+	// github.com/golang/protobuf v1.4.2
+	github.com/tensorflow/tensorflow v0.0.0-00010101000000-000000000000
 	go.uber.org/multierr v1.3.0
 	go.uber.org/zap v1.13.0
 	golang.org/x/net v0.0.0-20191021144547-ec77196f6094
 	golang.org/x/tools v0.0.0-20191127201027-ecd32218bd7f // indirect
-	google.golang.org/genproto v0.0.0-20191108220845-16a3f7862a1a // indirect
-	google.golang.org/grpc v1.24.0
+	google.golang.org/grpc v1.30.0
+	google.golang.org/protobuf v1.25.0 // indirect
 	gopkg.in/go-playground/assert.v1 v1.2.1 // indirect
 	gopkg.in/yaml.v2 v2.2.4 // indirect
+	// google.golang.org/grpc v1.30.0
+	tensorflow_serving v0.0.0-00010101000000-000000000000
 )

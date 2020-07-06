@@ -184,6 +184,8 @@ var (
 )
 
 func main() {
+	fmt.Println("ghz started")
+
 	kingpin.Version(version)
 	kingpin.CommandLine.HelpFlag.Short('h')
 	kingpin.CommandLine.VersionFlag.Short('v')
@@ -233,6 +235,7 @@ func main() {
 		options = append(options, runner.WithLogger(logger))
 	}
 
+	fmt.Println("Start Run")
 	if logger != nil {
 		logger.Debugw("Start Run", "config", cfg)
 	}

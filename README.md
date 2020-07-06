@@ -15,6 +15,8 @@
 
 Simple [gRPC](http://grpc.io/) benchmarking and load testing tool inspired by [hey](https://github.com/rakyll/hey/) and [grpcurl](https://github.com/fullstorydev/grpcurl).
 
+This is a hacked version of ghz that works with tensorflow_serving without relying on gRPC reflection.
+
 ## Documentation
 
 All documentation at [ghz.sh](https://ghz.sh).

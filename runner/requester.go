@@ -3,25 +3,31 @@ package runner
 import (
 	"context"
 	"encoding/json"
-	"fmt"
+	"log"
 	"math"
 	"strconv"
 	"strings"
 	"sync"
+	tensorflow_serving "tensorflow_serving/apis"
 	"time"
 
-	"github.com/bojand/ghz/protodesc"
+	//	"github.com/bojand/ghz/protodesc"
 	"github.com/jhump/protoreflect/desc"
-	"github.com/jhump/protoreflect/dynamic"
 	"github.com/jhump/protoreflect/dynamic/grpcdynamic"
-	"github.com/jhump/protoreflect/grpcreflect"
+
+	//	"github.com/jhump/protoreflect/grpcreflect"
+	//	"github.com/golang/protobuf/descriptor"
 
 	"go.uber.org/multierr"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/keepalive"
-	"google.golang.org/grpc/metadata"
 
-	reflectpb "google.golang.org/grpc/reflection/grpc_reflection_v1alpha"
+	//	"google.golang.org/grpc/metadata"
+	apis "tensorflow_serving/apis"
+	// "github.com/tensorflow/tensorflow/tensorflow/go/core/framework/tensor_go_proto"
+	// "github.com/tensorflow/tensorflow/tensorflow/go/core/framework/tensor_shape_go_proto"
+	// "github.com/tensorflow/tensorflow/tensorflow/go/core/framework/types_go_proto"
+	//	reflectpb "google.golang.org/grpc/reflection/grpc_reflection_v1alpha"
 )
 
 // Max size of the buffer of result channel.
@@ -37,9 +43,10 @@ type callResult struct {
 
 // Requester is used for doing the requests
 type Requester struct {
-	conns    []*grpc.ClientConn
-	stubs    []grpcdynamic.Stub
-	handlers []*statsHandler
+	conns           []*grpc.ClientConn
+	stubs           []grpcdynamic.Stub
+	predictionStubs []tensorflow_serving.PredictionServiceClient
+	handlers        []*statsHandler
 
 	mtd      *desc.MethodDescriptor
 	reporter *Reporter
@@ -63,7 +70,7 @@ type Requester struct {
 func newRequester(c *RunConfig) (*Requester, error) {
 
 	var err error
-	var mtd *desc.MethodDescriptor
+	//var mtd *desc.MethodDescriptor
 
 	var qpsTick time.Duration
 	if c.qps > 0 {
@@ -71,83 +78,111 @@ func newRequester(c *RunConfig) (*Requester, error) {
 	}
 
 	reqr := &Requester{
-		config:     c,
-		qpsTick:    qpsTick,
-		stopReason: ReasonNormalEnd,
-		results:    make(chan *callResult, min(c.c*1000, maxResult)),
-		stopCh:     make(chan bool, c.c),
-		conns:      make([]*grpc.ClientConn, 0, c.nConns),
-		stubs:      make([]grpcdynamic.Stub, 0, c.nConns),
+		config:          c,
+		qpsTick:         qpsTick,
+		stopReason:      ReasonNormalEnd,
+		results:         make(chan *callResult, min(c.c*1000, maxResult)),
+		stopCh:          make(chan bool, c.c),
+		conns:           make([]*grpc.ClientConn, 0, c.nConns),
+		stubs:           make([]grpcdynamic.Stub, 0, c.nConns),
+		predictionStubs: make([]tensorflow_serving.PredictionServiceClient, 0, c.nConns),
 	}
 
-	if c.proto != "" {
-		mtd, err = protodesc.GetMethodDescFromProto(c.call, c.proto, c.importPaths)
-	} else if c.protoset != "" {
-		mtd, err = protodesc.GetMethodDescFromProtoSet(c.call, c.protoset)
-	} else {
-		// use reflection to get method descriptor
-		var cc *grpc.ClientConn
-		// temporary connection for reflection, do not store as requester connections
-		cc, err = reqr.newClientConn(false)
-		if err != nil {
-			return nil, err
-		}
+	// if c.proto != "" {
+	// 	mtd, err = protodesc.GetMethodDescFromProto(c.call, c.proto, c.importPaths)
+	// } else if c.protoset != "" {
+	// 	mtd, err = protodesc.GetMethodDescFromProtoSet(c.call, c.protoset)
+	// } else {
+	// 	// use reflection to get method descriptor
+	// 	var cc *grpc.ClientConn
+	// 	// temporary connection for reflection, do not store as requester connections
+	// 	cc, err = reqr.newClientConn(false)
+	// 	if err != nil {
+	// 		return nil, err
+	// 	}
 
-		defer func() {
-			// purposefully ignoring error as we do not care if there
-			// is an error on close
-			_ = cc.Close()
-		}()
+	// 	defer func() {
+	// 		// purposefully ignoring error as we do not care if there
+	// 		// is an error on close
+	// 		_ = cc.Close()
+	// 	}()
 
-		// cancel is ignored here as connection.Close() is used.
-		// See https://godoc.org/google.golang.org/grpc#DialContext
-		ctx, _ := context.WithTimeout(context.Background(), c.dialTimeout)
+	// 	// cancel is ignored here as connection.Close() is used.
+	// 	// See https://godoc.org/google.golang.org/grpc#DialContext
+	// 	ctx, _ := context.WithTimeout(context.Background(), c.dialTimeout)
 
-		md := make(metadata.MD)
-		if c.rmd != nil && len(c.rmd) > 0 {
-			md = metadata.New(c.rmd)
-		}
+	// 	md := make(metadata.MD)
+	// 	if c.rmd != nil && len(c.rmd) > 0 {
+	// 		md = metadata.New(c.rmd)
+	// 	}
 
-		refCtx := metadata.NewOutgoingContext(ctx, md)
+	// 	refCtx := metadata.NewOutgoingContext(ctx, md)
 
-		refClient := grpcreflect.NewClient(refCtx, reflectpb.NewServerReflectionClient(cc))
+	// 	refClient := grpcreflect.NewClient(refCtx, reflectpb.NewServerReflectionClient(cc))
 
-		mtd, err = protodesc.GetMethodDescFromReflect(c.call, refClient)
-	}
+	// 	mtd, err = protodesc.GetMethodDescFromReflect(c.call, refClient)
+	// }
 
-	if err != nil {
-		return nil, err
-	}
+	// if err != nil {
+	// 	return nil, err
+	// }
 
-	md := mtd.GetInputType()
-	payloadMessage := dynamic.NewMessage(md)
-	if payloadMessage == nil {
-		return nil, fmt.Errorf("No input type of method: %s", mtd.GetName())
-	}
+	log.Print("logging!!!")
 
-	// fill in the rest
-	reqr.mtd = mtd
+	// fd, err := desc.LoadFileDescriptor("predict.proto")
+	// log.Print(err)
+	// log.Print(fd.String())
+	// sd := fd.FindService("tensorflow.serving.PredictionService")
+	// mtd = sd.FindMethodByName("Predict")
+
+	// request := &apis.PredictRequest{
+	// 	ModelSpec: &apis.ModelSpec{},
+	// 	Inputs:    make(map[string]*tensor_go_proto.TensorProto),
+	// }
+
+	//_, mtd = descriptor.MessageDescriptorProto(request)
+
+	// md := mtd.GetInputType()
+	// payloadMessage := dynamic.NewMessage(md)
+	// if payloadMessage == nil {
+	// 	return nil, fmt.Errorf("No input type of method: %s", mtd.GetName())
+	// }
+
+	// // fill in the rest
+	// reqr.mtd = mtd
 
 	// fill in JSON string array data for optimization for non client-streaming
 	reqr.arrayJSONData = nil
-	if !c.binary && !reqr.mtd.IsClientStreaming() {
-		if strings.IndexRune(string(c.data), '[') == 0 { // it's an array
-			var dat []map[string]interface{}
-			if err := json.Unmarshal(c.data, &dat); err != nil {
+	//	if !c.binary && !reqr.mtd.IsClientStreaming() {
+	log.Println("Unmarshaling in requester")
+	if strings.IndexRune(string(c.data), '[') == 0 { // it's an array
+		var dat []map[string]interface{}
+		if err := json.Unmarshal(c.data, &dat); err != nil {
+			return nil, err
+		}
+
+		reqr.arrayJSONData = make([]string, len(dat))
+		for i, d := range dat {
+			var strd []byte
+			if strd, err = json.Marshal(d); err != nil {
 				return nil, err
 			}
 
-			reqr.arrayJSONData = make([]string, len(dat))
-			for i, d := range dat {
-				var strd []byte
-				if strd, err = json.Marshal(d); err != nil {
-					return nil, err
-				}
-
-				reqr.arrayJSONData[i] = string(strd)
-			}
+			reqr.arrayJSONData[i] = string(strd)
 		}
+	} else {
+		reqr.arrayJSONData = make([]string, 1)
+		var dat map[string]interface{}
+		if err := json.Unmarshal(c.data, &dat); err != nil {
+			return nil, err
+		}
+		var strd []byte
+		if strd, err = json.Marshal(dat); err != nil {
+			return nil, err
+		}
+		reqr.arrayJSONData[0] = string(strd)
 	}
+	//	}
 
 	return reqr, nil
 }
@@ -168,7 +203,9 @@ func (b *Requester) Run() (*Report, error) {
 	// create a client stub for each connection
 	for n := 0; n < b.config.nConns; n++ {
 		stub := grpcdynamic.NewStub(cc[n])
+		predictionStub := apis.NewPredictionServiceClient(cc[n])
 		b.stubs = append(b.stubs, stub)
+		b.predictionStubs = append(b.predictionStubs, predictionStub)
 	}
 
 	b.reporter = newReporter(b.results, b.config)
@@ -351,15 +388,16 @@ func (b *Requester) runWorkers() error {
 		}
 
 		w := Worker{
-			stub:          b.stubs[n],
-			mtd:           b.mtd,
-			config:        b.config,
-			stopCh:        b.stopCh,
-			qpsTick:       b.qpsTick,
-			reqCounter:    &b.reqCounter,
-			nReq:          nReqPerWorker,
-			workerID:      wID,
-			arrayJSONData: b.arrayJSONData,
+			stub:           b.stubs[n],
+			predictionStub: b.predictionStubs[n],
+			mtd:            b.mtd,
+			config:         b.config,
+			stopCh:         b.stopCh,
+			qpsTick:        b.qpsTick,
+			reqCounter:     &b.reqCounter,
+			nReq:           nReqPerWorker,
+			workerID:       wID,
+			arrayJSONData:  b.arrayJSONData,
 		}
 
 		n++ // increment connection counter

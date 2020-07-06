@@ -2,12 +2,13 @@ package runner
 
 import (
 	"context"
-	"fmt"
 	"io"
+	"log"
 	"sync/atomic"
 	"time"
 
 	"github.com/gogo/protobuf/proto"
+	"github.com/golang/protobuf/jsonpb"
 	"github.com/jhump/protoreflect/desc"
 	"github.com/jhump/protoreflect/dynamic"
 	"github.com/jhump/protoreflect/dynamic/grpcdynamic"
@@ -15,12 +16,16 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/encoding/gzip"
 	"google.golang.org/grpc/metadata"
+
+	apis "tensorflow_serving/apis"
+	tensorflow_serving "tensorflow_serving/apis"
 )
 
 // Worker is used for doing a single stream of requests in parallel
 type Worker struct {
-	stub grpcdynamic.Stub
-	mtd  *desc.MethodDescriptor
+	stub           grpcdynamic.Stub
+	predictionStub tensorflow_serving.PredictionServiceClient
+	mtd            *desc.MethodDescriptor
 
 	config     *RunConfig
 	stopCh     chan bool
@@ -70,16 +75,26 @@ func (w *Worker) makeRequest() error {
 	var inputs []*dynamic.Message
 	var err error
 
+	var predictRequest apis.PredictRequest
+
 	// try the optimized path for JSON data for non client-streaming
-	if !w.config.binary && !w.mtd.IsClientStreaming() && len(w.arrayJSONData) > 0 {
-		indx := int((reqNum - 1) % int64(len(w.arrayJSONData))) // we want to start from inputs[0] so dec reqNum
-		if inputs, err = w.getMessages(ctd, []byte(w.arrayJSONData[indx])); err != nil {
-			return err
-		}
+	// if !w.config.binary && !w.mtd.IsClientStreaming() && len(w.arrayJSONData) > 0 {
+	// 	indx := int((reqNum - 1) % int64(len(w.arrayJSONData))) // we want to start from inputs[0] so dec reqNum
+	// 	if inputs, err = w.getMessages(ctd, []byte(w.arrayJSONData[indx])); err != nil {
+	// 		return err
+	// 	}
+	// } else {
+	// 	if inputs, err = w.getMessages(ctd, w.config.data); err != nil {
+	// 		return err
+	// 	}
+	// }
+
+	log.Println("w.arrayJSONData: %+v", w.arrayJSONData)
+	indx := int((reqNum - 1) % int64(len(w.arrayJSONData))) // we want to start from inputs[0] so dec reqNum
+	if err := jsonpb.UnmarshalString(w.arrayJSONData[indx], &predictRequest); err != nil {
+		log.Printf("error: %s", err.Error())
 	} else {
-		if inputs, err = w.getMessages(ctd, w.config.data); err != nil {
-			return err
-		}
+		log.Println("Worked \\o/ %+v", predictRequest)
 	}
 
 	mdMap, err := ctd.executeMetadata(string(w.config.metadata))
@@ -117,52 +132,53 @@ func (w *Worker) makeRequest() error {
 	var callType string
 	if w.config.hasLog {
 		callType = "unary"
-		if w.mtd.IsClientStreaming() && w.mtd.IsServerStreaming() {
-			callType = "bidi"
-		} else if w.mtd.IsServerStreaming() {
-			callType = "server-streaming"
-		} else if w.mtd.IsClientStreaming() {
-			callType = "client-streaming"
-		}
+		// if w.mtd.IsClientStreaming() && w.mtd.IsServerStreaming() {
+		// 	callType = "bidi"
+		// } else if w.mtd.IsServerStreaming() {
+		// 	callType = "server-streaming"
+		// } else if w.mtd.IsClientStreaming() {
+		// 	callType = "client-streaming"
+		// }
 
 		w.config.log.Debugw("Making request", "workerID", w.workerID,
-			"call type", callType, "call", w.mtd.GetFullyQualifiedName(),
+			"call type", callType, "call", "tensorflow.serving.PredictionService.Predict",
 			"input", inputs, "metadata", reqMD)
 	}
 
 	// RPC errors are handled via stats handler
-	if w.mtd.IsClientStreaming() && w.mtd.IsServerStreaming() {
-		_ = w.makeBidiRequest(&ctx, inputs)
-	} else if w.mtd.IsClientStreaming() {
-		_ = w.makeClientStreamingRequest(&ctx, inputs)
-	} else {
+	// if w.mtd.IsClientStreaming() && w.mtd.IsServerStreaming() {
+	// 	_ = w.makeBidiRequest(&ctx, inputs)
+	// } else if w.mtd.IsClientStreaming() {
+	// 	_ = w.makeClientStreamingRequest(&ctx, inputs)
+	// } else {
 
-		inputsLen := len(inputs)
-		if inputsLen == 0 {
-			return fmt.Errorf("no data provided for request")
-		}
-		inputIdx := int((reqNum - 1) % int64(inputsLen)) // we want to start from inputs[0] so dec reqNum
+	// inputsLen := len(inputs)
+	// if inputsLen == 0 {
+	// 	return fmt.Errorf("no data provided for request")
+	// }
+	//inputIdx := int((reqNum - 1) % int64(inputsLen)) // we want to start from inputs[0] so dec reqNum
 
-		if w.mtd.IsServerStreaming() {
-			_ = w.makeServerStreamingRequest(&ctx, inputs[inputIdx])
-		} else {
-			var res proto.Message
-			var resErr error
-			var callOptions = []grpc.CallOption{}
-			if w.config.enableCompression {
-				callOptions = append(callOptions, grpc.UseCompressor(gzip.Name))
-			}
-
-			res, resErr = w.stub.InvokeRpc(ctx, w.mtd, inputs[inputIdx], callOptions...)
-
-			if w.config.hasLog {
-				w.config.log.Debugw("Received response", "workerID", w.workerID, "call type", callType,
-					"call", w.mtd.GetFullyQualifiedName(),
-					"input", inputs, "metadata", reqMD,
-					"response", res, "error", resErr)
-			}
-		}
+	// if w.mtd.IsServerStreaming() {
+	// 	_ = w.makeServerStreamingRequest(&ctx, inputs[inputIdx])
+	// } else {
+	var res proto.Message
+	var resErr error
+	var callOptions = []grpc.CallOption{}
+	if w.config.enableCompression {
+		callOptions = append(callOptions, grpc.UseCompressor(gzip.Name))
 	}
+
+	//res, resErr = w.stub.InvokeRpc(ctx, w.mtd, inputs[inputIdx], callOptions...)
+	res, resErr = w.predictionStub.Predict(ctx, &predictRequest)
+
+	if w.config.hasLog {
+		w.config.log.Debugw("Received response", "workerID", w.workerID, "call type", callType,
+			"call", "tensorflow.serving.PredictionService.Predict",
+			"input", inputs, "metadata", reqMD,
+			"response", res, "error", resErr)
+	}
+	// }
+	//}
 
 	return err
 }
