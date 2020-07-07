@@ -89,12 +89,11 @@ func (w *Worker) makeRequest() error {
 	// 	}
 	// }
 
-	log.Println("w.arrayJSONData: %+v", w.arrayJSONData)
+	// log.Println("w.arrayJSONData: %+v", w.arrayJSONData)
 	indx := int((reqNum - 1) % int64(len(w.arrayJSONData))) // we want to start from inputs[0] so dec reqNum
 	if err := jsonpb.UnmarshalString(w.arrayJSONData[indx], &predictRequest); err != nil {
 		log.Printf("error: %s", err.Error())
-	} else {
-		log.Println("Worked \\o/ %+v", predictRequest)
+		return err
 	}
 
 	mdMap, err := ctd.executeMetadata(string(w.config.metadata))
